@@ -26,6 +26,9 @@ static class Common
     [return: MarshalAs(UnmanagedType.Bool)]
     static extern bool SetDllDirectory(string lpPathName);
 
+    [DllImport("libdl.so")]
+    static extern IntPtr dlopen(string filename, int flags);
+
     [Conditional("DEBUG")]
     public static void Log(string format, params object[] args)
     {
@@ -252,26 +255,61 @@ static class Common
                 {
                     CopyTo(copyStream, assemblyTempFile);
                 }
-                if (!MoveFileEx(assemblyTempFilePath, null, DelayUntilReboot))
-                {
-                    //TODO: for now we ignore the return value.
-                }
+                DeleteFileOnReboot(assemblyTempFilePath);
             }
         }
 
-        SetDllDirectory(tempBasePath);
+        if (IsWin32())
+        {
+            SetDllDirectory(tempBasePath);
+        }
+        else
+        {
+            Environment.SetEnvironmentVariable("LD_LIBRARY_PATH", tempBasePath);
+            Environment.SetEnvironmentVariable("MONO_PATH", tempBasePath);
+        }
 
         foreach (var lib in libs)
         {
             name = ResourceNameToPath(lib);
 
-            if (name.EndsWith(".dll"))
+            if (name.EndsWith(".dll") && IsWin32())
             {
                 var assemblyTempFilePath = Path.Combine(tempBasePath, name);
 
                 LoadLibrary(assemblyTempFilePath);
             }
+            else if (name.EndsWith(".so") && !IsWin32())
+            {
+                var assemblyTempFilePath = Path.Combine(tempBasePath, name);
+
+                dlopen(assemblyTempFilePath, 2 | 8);
+            }
         }
+    }
+
+    private static void DeleteFileOnReboot(string path)
+    {
+        if (IsWin32())
+        {
+            if (!MoveFileEx(path, null, DelayUntilReboot))
+            {
+                //TODO: for now we ignore the return value.
+            }
+        }
+        else
+        {
+            // Delete file immediately
+            // TODO: Do we even need to implement something similar to above? Linux/OS X don't lock file access.
+            File.Delete(path);
+        }
+    }
+
+    private static bool IsWin32()
+    {
+        return (Environment.OSVersion.Platform == PlatformID.Win32NT
+            || Environment.OSVersion.Platform == PlatformID.Win32Windows
+            || Environment.OSVersion.Platform == PlatformID.Win32S);
     }
 
     static string ResourceNameToPath(string lib)
