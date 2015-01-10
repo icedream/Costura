@@ -252,7 +252,7 @@ static class Common
 
     static void ActualPreloadUnmanagedLibraries(String tempBasePath, IEnumerable<string> libs, Dictionary<string, string> checksums)
     {
-        CreateDirectory(Path.Combine(tempBasePath));
+        CreateDirectory(tempBasePath);
         InternalPreloadUnmanagedLibraries(tempBasePath, libs, checksums);
     }
 
