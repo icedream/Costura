@@ -29,6 +29,9 @@ static class Common
     [DllImport("libdl.so")]
     static extern IntPtr dlopen(string filename, int flags);
 
+    [DllImport("/usr/lib/libSystem.dylib", EntryPoint="dlopen")]
+    static extern IntPtr dlopenMac(string filename, int flags);
+
     [Conditional("DEBUG")]
     public static void Log(string format, params object[] args)
     {
@@ -112,7 +115,6 @@ static class Common
         if (requestedAssemblyName.CultureInfo != null && !String.IsNullOrEmpty(requestedAssemblyName.CultureInfo.Name))
             name = String.Format("{0}.{1}", requestedAssemblyName.CultureInfo.Name, name);
 
-        var bittyness = IntPtr.Size == 8 ? "64" : "32";
         var assemblyTempFilePath = Path.Combine(tempBasePath, String.Concat(name, ".dll"));
         if (File.Exists(assemblyTempFilePath))
         {
@@ -123,7 +125,7 @@ static class Common
         {
             return Assembly.LoadFile(assemblyTempFilePath);
         }
-        assemblyTempFilePath = Path.Combine(Path.Combine(tempBasePath, bittyness), String.Concat(name, ".dll"));
+        assemblyTempFilePath = Path.Combine(tempBasePath, String.Concat(name, ".dll"));
         if (File.Exists(assemblyTempFilePath))
         {
             return Assembly.LoadFile(assemblyTempFilePath);
@@ -177,25 +179,44 @@ static class Common
     static Stream LoadStream(string fullname)
     {
         var executingAssembly = Assembly.GetExecutingAssembly();
+        Stream finalStream;
 
         if (fullname.EndsWith(".zip"))
         {
             using (var stream = executingAssembly.GetManifestResourceStream(fullname))
-            using (var compressStream = new DeflateStream(stream, CompressionMode.Decompress))
             {
-                var memStream = new MemoryStream();
-                CopyTo(compressStream, memStream);
-                memStream.Position = 0;
-                return memStream;
+                if (stream == null)
+                    throw new NullReferenceException("Resource stream " + fullname + " is not available");
+                using (var compressStream = new DeflateStream(stream, CompressionMode.Decompress))
+                {
+                    finalStream = new MemoryStream();
+                    CopyTo(compressStream, finalStream);
+                    finalStream.Position = 0;
+                }
             }
         }
+        else
+        {
+            finalStream = executingAssembly.GetManifestResourceStream(fullname);
+        }
 
-        return executingAssembly.GetManifestResourceStream(fullname);
+        if (finalStream == null)
+            throw new NullReferenceException("Resource stream " + fullname + " could not be processed");
+
+        return finalStream;
     }
 
     // Mutex code from http://stackoverflow.com/questions/229565/what-is-a-good-pattern-for-using-a-global-mutex-in-c
     public static void PreloadUnmanagedLibraries(string hash, string tempBasePath, IEnumerable<string> libs, Dictionary<string, string> checksums)
     {
+        if (!IsWin32())
+        {
+            Thread.BeginCriticalRegion();
+            ActualPreloadUnmanagedLibraries(tempBasePath, libs, checksums);
+            Thread.EndCriticalRegion();
+            return;
+        }
+
         string mutexId = string.Format("Global\\Costura{0}", hash);
 
         using (var mutex = new Mutex(false, mutexId))
@@ -219,9 +240,7 @@ static class Common
                     hasHandle = true;
                 }
 
-                var bittyness = IntPtr.Size == 8 ? "64" : "32";
-                CreateDirectory(Path.Combine(tempBasePath, bittyness));
-                InternalPreloadUnmanagedLibraries(tempBasePath, libs, checksums);
+                ActualPreloadUnmanagedLibraries(tempBasePath, libs, checksums);
             }
             finally
             {
@@ -229,6 +248,12 @@ static class Common
                     mutex.ReleaseMutex();
             }
         }
+    }
+
+    static void ActualPreloadUnmanagedLibraries(String tempBasePath, IEnumerable<string> libs, Dictionary<string, string> checksums)
+    {
+        CreateDirectory(Path.Combine(tempBasePath));
+        InternalPreloadUnmanagedLibraries(tempBasePath, libs, checksums);
     }
 
     static void InternalPreloadUnmanagedLibraries(string tempBasePath, IEnumerable<string> libs, Dictionary<string, string> checksums)
@@ -263,11 +288,6 @@ static class Common
         {
             SetDllDirectory(tempBasePath);
         }
-        else
-        {
-            Environment.SetEnvironmentVariable("LD_LIBRARY_PATH", tempBasePath);
-            Environment.SetEnvironmentVariable("MONO_PATH", tempBasePath);
-        }
 
         foreach (var lib in libs)
         {
@@ -279,11 +299,13 @@ static class Common
 
                 LoadLibrary(assemblyTempFilePath);
             }
-            else if (name.EndsWith(".so") && !IsWin32())
+            else if (name.EndsWith(".dylib") && Environment.OSVersion.Platform == PlatformID.MacOSX)
             {
                 var assemblyTempFilePath = Path.Combine(tempBasePath, name);
-
-                dlopen(assemblyTempFilePath, 2 | 8);
+            }
+            else if (name.EndsWith(".so") && Environment.OSVersion.Platform == PlatformID.Unix)
+            {
+                var assemblyTempFilePath = Path.Combine(tempBasePath, name);
             }
         }
     }
@@ -299,9 +321,11 @@ static class Common
         }
         else
         {
-            // Delete file immediately
-            // TODO: Do we even need to implement something similar to above? Linux/OS X don't lock file access.
-            File.Delete(path);
+            // Delete file when appdomain is unloaded
+            AppDomain.CurrentDomain.DomainUnload += (sender, args) =>
+            {
+                File.Delete(path);
+            };
         }
     }
 
@@ -319,7 +343,7 @@ static class Common
         string name = lib;
 
         if (lib.StartsWith(String.Concat("costura", bittyness, ".")))
-            name = Path.Combine(bittyness, lib.Substring(10));
+            name = lib.Substring(10);
         else if (lib.StartsWith("costura."))
             name = lib.Substring(8);
 
