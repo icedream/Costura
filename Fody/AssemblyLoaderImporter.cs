@@ -96,7 +96,10 @@ partial class ModuleWeaver
     {
         foreach (var field in sourceType.Fields)
         {
-            var newField = new FieldDefinition(field.Name, field.Attributes, Resolve(field.FieldType, sourceType, targetType));
+            var newField = new FieldDefinition(field.Name, field.Attributes,
+                Resolve(field.FieldType, sourceType, targetType));
+            if (field.HasConstant)
+                newField.Constant = field.Constant;
             targetType.Fields.Add(newField);
         }
     }
