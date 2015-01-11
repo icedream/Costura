@@ -1,20 +1,21 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
 using Mono.Cecil;
 using Mono.Cecil.Cil;
 using Mono.Cecil.Rocks;
+using TypeAttributes = Mono.Cecil.TypeAttributes;
 
 partial class ModuleWeaver
 {
     readonly ConstructorInfo instructionConstructorInfo = typeof(Instruction).GetConstructor(BindingFlags.NonPublic | BindingFlags.Instance, null, new[] { typeof(OpCode), typeof(object) }, null);
-    TypeDefinition targetType;
-    TypeDefinition sourceType;
-    TypeDefinition commonType;
+
+    bool hasUnmanaged;
+
     MethodDefinition attachMethod;
     MethodDefinition loaderCctor;
-    bool hasUnmanaged;
     FieldDefinition assemblyNamesField;
     FieldDefinition symbolNamesField;
     FieldDefinition preloadListField;
@@ -26,6 +27,7 @@ partial class ModuleWeaver
     {
         var moduleDefinition = GetTemplateModuleDefinition();
 
+        TypeDefinition sourceType;
         if (createTemporaryAssemblies)
         {
             sourceType = moduleDefinition.Types.First(x => x.Name == "ILTemplateWithTempAssembly");
@@ -41,17 +43,39 @@ partial class ModuleWeaver
             sourceType = moduleDefinition.Types.First(x => x.Name == "ILTemplate");
             DumpSource("ILTemplate");
         }
-        commonType = moduleDefinition.Types.First(x => x.Name == "Common");
+
+        var commonType = moduleDefinition.Types.First(x => x.Name == "Common");
         DumpSource("Common");
 
-        targetType = new TypeDefinition("Costura", "AssemblyLoader", sourceType.Attributes, Resolve(sourceType.BaseType));
+        CopyFields(sourceType, commonType);
+        CopyMethods(sourceType, commonType);
+        sourceType = commonType;
+
+        var targetType = new TypeDefinition("Costura", "AssemblyLoader", sourceType.Attributes,
+            Resolve(sourceType.BaseType, sourceType, sourceType)); // TODO uh...
         targetType.CustomAttributes.Add(new CustomAttribute(compilerGeneratedAttributeCtor));
         ModuleDefinition.Types.Add(targetType);
-        CopyFields(sourceType);
-        CopyMethod(sourceType.Methods.First(x => x.Name == "ResolveAssembly"));
+        CopyFields(sourceType, targetType);
+        CopyMethod(sourceType.Methods.First(x => x.Name == "ResolveAssembly"), targetType);
 
-        loaderCctor = CopyMethod(sourceType.Methods.First(x => x.IsConstructor && x.IsStatic));
-        attachMethod = CopyMethod(sourceType.Methods.First(x => x.Name == "Attach"));
+        loaderCctor = CopyMethod(sourceType.Methods.First(x => x.IsConstructor && x.IsStatic), targetType);
+        attachMethod = CopyMethod(sourceType.Methods.First(x => x.Name == "Attach"), targetType);
+
+        foreach (var field in targetType.Fields)
+        {
+            if (field.Name == "assemblyNames")
+                assemblyNamesField = field;
+            if (field.Name == "symbolNames")
+                symbolNamesField = field;
+            if (field.Name == "preloadList")
+                preloadListField = field;
+            if (field.Name == "preload32List")
+                preload32ListField = field;
+            if (field.Name == "preload64List")
+                preload64ListField = field;
+            if (field.Name == "checksums")
+                checksumsField = field;
+        }
     }
 
     void DumpSource(string file)
@@ -68,24 +92,12 @@ partial class ModuleWeaver
         }
     }
 
-    void CopyFields(TypeDefinition source)
+    void CopyFields(TypeDefinition sourceType, TypeDefinition targetType)
     {
-        foreach (var field in source.Fields)
+        foreach (var field in sourceType.Fields)
         {
-            var newField = new FieldDefinition(field.Name, field.Attributes, Resolve(field.FieldType));
+            var newField = new FieldDefinition(field.Name, field.Attributes, Resolve(field.FieldType, sourceType, targetType));
             targetType.Fields.Add(newField);
-            if (field.Name == "assemblyNames")
-                assemblyNamesField = newField;
-            if (field.Name == "symbolNames")
-                symbolNamesField = newField;
-            if (field.Name == "preloadList")
-                preloadListField = newField;
-            if (field.Name == "preload32List")
-                preload32ListField = newField;
-            if (field.Name == "preload64List")
-                preload64ListField = newField;
-            if (field.Name == "checksums")
-                checksumsField = newField;
         }
     }
 
@@ -104,7 +116,7 @@ partial class ModuleWeaver
         }
     }
 
-    TypeReference Resolve(TypeReference baseType)
+    TypeReference Resolve(TypeReference baseType, TypeDefinition sourceType, TypeDefinition targetType)
     {
         var typeDefinition = baseType.Resolve();
         var typeReference = ModuleDefinition.Import(typeDefinition);
@@ -119,7 +131,49 @@ partial class ModuleWeaver
         return typeReference;
     }
 
-    MethodDefinition CopyMethod(MethodDefinition templateMethod, bool makePrivate = false)
+    TypeDefinition CopyNestedType(TypeDefinition templateType, TypeDefinition targetType, bool makePrivate = false)
+    {
+        if (templateType == null)
+            throw new ArgumentNullException("templateType");
+        if (targetType == null)
+            throw new ArgumentNullException("targetType");
+        var attributes = templateType.Attributes;
+        if (makePrivate)
+        {
+            attributes &= ~TypeAttributes.Public;
+        }
+
+        if (templateType.Attributes.HasFlag(TypeAttributes.Public))
+        {
+            attributes |= TypeAttributes.NestedPublic;
+        }
+        else
+        {
+            attributes |= TypeAttributes.NestedPrivate;
+        }
+
+        var newType = new TypeDefinition(templateType.Namespace, templateType.Name, attributes)
+        {
+            DeclaringType = targetType,
+            BaseType = Resolve(templateType.BaseType, templateType, targetType),
+            Attributes = attributes | TypeAttributes.NestedPrivate
+        };
+        CopyFields(templateType, newType);
+        CopyMethods(templateType, newType);
+        
+        targetType.NestedTypes.Add(newType);
+        return newType;
+    }
+
+    private void CopyMethods(TypeDefinition templateType, TypeDefinition targetType, bool makePrivate = false)
+    {
+        foreach (var method in templateType.Methods)
+        {
+            CopyMethod(method, targetType, makePrivate);
+        }
+    }
+
+    MethodDefinition CopyMethod(MethodDefinition templateMethod, TypeDefinition targetType, bool makePrivate = false)
     {
         var attributes = templateMethod.Attributes;
         if (makePrivate)
@@ -127,11 +181,12 @@ partial class ModuleWeaver
             attributes &= ~Mono.Cecil.MethodAttributes.Public;
             attributes |= Mono.Cecil.MethodAttributes.Private;
         }
-        var returnType = Resolve(templateMethod.ReturnType);
+        var returnType = Resolve(templateMethod.ReturnType, templateMethod.DeclaringType, targetType);
         var newMethod = new MethodDefinition(templateMethod.Name, attributes, returnType)
                             {
                                 IsPInvokeImpl = templateMethod.IsPInvokeImpl,
                                 IsPreserveSig = templateMethod.IsPreserveSig,
+                                DeclaringType = targetType
                             };
         if (templateMethod.IsPInvokeImpl)
         {
@@ -147,18 +202,18 @@ partial class ModuleWeaver
         if (templateMethod.Body != null)
         {
             newMethod.Body.InitLocals = templateMethod.Body.InitLocals;
+            CopyInstructions(templateMethod, newMethod);
+            CopyExceptionHandlers(templateMethod, newMethod);
             foreach (var variableDefinition in templateMethod.Body.Variables)
             {
-                var newVariableDefinition = new VariableDefinition(Resolve(variableDefinition.VariableType));
+                var newVariableDefinition = new VariableDefinition(Import(variableDefinition.VariableType, templateMethod.DeclaringType, targetType) as TypeReference);
                 newVariableDefinition.Name = variableDefinition.Name;
                 newMethod.Body.Variables.Add(newVariableDefinition);
             }
-            CopyInstructions(templateMethod, newMethod);
-            CopyExceptionHandlers(templateMethod, newMethod);
         }
         foreach (var parameterDefinition in templateMethod.Parameters)
         {
-            var newParameterDefinition = new ParameterDefinition(Resolve(parameterDefinition.ParameterType));
+            var newParameterDefinition = new ParameterDefinition(Resolve(parameterDefinition.ParameterType, templateMethod.DeclaringType, targetType));
             newParameterDefinition.Name = parameterDefinition.Name;
             newMethod.Parameters.Add(newParameterDefinition);
         }
@@ -200,7 +255,7 @@ partial class ModuleWeaver
             }
             if (exceptionHandler.CatchType != null)
             {
-                handler.CatchType = Resolve(exceptionHandler.CatchType);
+                handler.CatchType = Resolve(exceptionHandler.CatchType, templateMethod.DeclaringType, newMethod.DeclaringType);
             }
             newMethod.Body.ExceptionHandlers.Add(handler);
         }
@@ -210,11 +265,11 @@ partial class ModuleWeaver
     {
         foreach (var instruction in templateMethod.Body.Instructions)
         {
-            newMethod.Body.Instructions.Add(CloneInstruction(instruction));
+            newMethod.Body.Instructions.Add(CloneInstruction(instruction, templateMethod.DeclaringType, newMethod.DeclaringType));
         }
     }
 
-    Instruction CloneInstruction(Instruction instruction)
+    Instruction CloneInstruction(Instruction instruction, TypeDefinition sourceType, TypeDefinition targetType)
     {
         Instruction newInstruction;
         if (instruction.OpCode == OpCodes.Ldstr && ((string)instruction.Operand) == "To be replaced at compile time")
@@ -224,7 +279,7 @@ partial class ModuleWeaver
         else
         {
             newInstruction = (Instruction)instructionConstructorInfo.Invoke(new[] { instruction.OpCode, instruction.Operand });
-            newInstruction.Operand = Import(instruction.Operand);
+            newInstruction.Operand = Import(instruction.Operand, sourceType, targetType);
         }
         newInstruction.SequencePoint = TranslateSequencePoint(instruction.SequencePoint);
         return newInstruction;
@@ -251,40 +306,77 @@ partial class ModuleWeaver
         };
     }
 
-    object Import(object operand)
+    object Import(object operand, TypeDefinition sourceType, TypeDefinition targetType)
     {
-        var reference = operand as MethodReference;
-        if (reference != null)
+        if (operand == null)
+            return null;
+
+        var typeReference = operand as TypeReference;
+        if (typeReference != null)
         {
-            var methodReference = reference;
-            if (methodReference.DeclaringType == sourceType || methodReference.DeclaringType == commonType)
+            if (typeReference.IsDeclaredInside(sourceType))
             {
-                var mr = targetType.Methods.FirstOrDefault(x => x.Name == methodReference.Name && x.Parameters.Count == methodReference.Parameters.Count);
-                if (mr == null)
-                {
-                    //little poetic license... :). .Resolve() doesn't work with "extern" methods
-                    return CopyMethod(methodReference.DeclaringType.Resolve().Methods
-                                      .First(m => m.Name == methodReference.Name && m.Parameters.Count == methodReference.Parameters.Count),
-                        methodReference.DeclaringType != sourceType);
-                }
+                var t = targetType.NestedTypes.FirstOrDefault(x => x.Name == typeReference.Name)
+                    ?? CopyNestedType(typeReference.DeclaringType.Resolve().NestedTypes.First(x => x.Name == typeReference.Name), targetType);
+                return t;
+            }
+            return Resolve(typeReference, sourceType, targetType);
+        }
+
+        var memberReference = operand as MemberReference;
+        if (memberReference == null)
+        {
+            return operand;
+        }
+
+        TypeDefinition targetDeclaringType = null;
+        TypeDefinition sourceDeclaringType = null;
+        
+        if (memberReference.DeclaringType.FullName == sourceType.FullName)
+        {
+            // source type
+            sourceDeclaringType = sourceType;
+            targetDeclaringType = targetType;
+        }
+        else if (memberReference.DeclaringType.IsDeclaredInside(sourceType))
+        {
+            // nested type
+            // TODO: Recurse nested types
+            sourceDeclaringType = sourceType.NestedTypes.First(n => n.Name == memberReference.DeclaringType.Name);
+            targetDeclaringType = targetType.NestedTypes.FirstOrDefault(x => x.Name == memberReference.DeclaringType.Name)
+                ?? CopyNestedType(memberReference.DeclaringType.Resolve(), targetType);
+        }
+
+        var methodReference = operand as MethodReference;
+        if (methodReference != null)
+        {
+            if (sourceDeclaringType != null)
+            {
+                var mr = targetDeclaringType.Methods.FirstOrDefault(x => x.Name == methodReference.Name && x.Parameters.Count == methodReference.Parameters.Count)
+                    ?? CopyMethod(sourceDeclaringType.Methods.First(m => m.Name == methodReference.Name && m.Parameters.Count == methodReference.Parameters.Count),
+                        targetDeclaringType,
+                        sourceDeclaringType != sourceType);
                 return mr;
             }
+
             if (methodReference.DeclaringType.IsGenericInstance)
             {
                 return ModuleDefinition.Import(methodReference.Resolve())
                     .MakeHostInstanceGeneric(methodReference.DeclaringType.GetGenericInstanceArguments().ToArray());
             }
+
             return ModuleDefinition.Import(methodReference.Resolve());
         }
-        var typeReference = operand as TypeReference;
-        if (typeReference != null)
-        {
-            return Resolve(typeReference);
-        }
+
         var fieldReference = operand as FieldReference;
         if (fieldReference != null)
         {
-            return targetType.Fields.First(f => f.Name == fieldReference.Name);
+            if (sourceDeclaringType != null)
+            {
+                return targetDeclaringType.Fields.FirstOrDefault(f => f.Name == fieldReference.Name);
+            }
+
+            return ModuleDefinition.Import(fieldReference.Resolve());
         }
         return operand;
     }

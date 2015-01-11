@@ -280,7 +280,7 @@ static class Common
                 {
                     CopyTo(copyStream, assemblyTempFile);
                 }
-                DeleteFileOnReboot(assemblyTempFilePath);
+                DeleteFileOnUnload(assemblyTempFilePath);
             }
         }
 
@@ -310,23 +310,20 @@ static class Common
         }
     }
 
-    private static void DeleteFileOnReboot(string path)
+    private static void DeleteFileOnUnload(string path)
     {
-        if (IsWin32())
-        {
-            if (!MoveFileEx(path, null, DelayUntilReboot))
-            {
-                //TODO: for now we ignore the return value.
-            }
-        }
-        else
-        {
             // Delete file when appdomain is unloaded
             AppDomain.CurrentDomain.DomainUnload += (sender, args) =>
             {
-                File.Delete(path);
+                try
+                {
+                    File.Delete(path);
+                }
+                catch
+                {
+                    { } // force ignore error
+                }
             };
-        }
     }
 
     private static bool IsWin32()

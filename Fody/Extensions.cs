@@ -17,6 +17,18 @@ public static class Extensions
         return ((GenericInstanceType)type).GenericArguments;
     }
 
+    public static bool IsDeclaredInside(this MemberReference self, TypeReference type)
+    {
+        var current = self.DeclaringType;
+        while (current != null)
+        {
+            if (current.FullName == type.FullName)
+                return true;
+            current = current.DeclaringType;
+        }
+        return false;
+    }
+
     public static MethodReference MakeHostInstanceGeneric(this MethodReference self, params TypeReference[] args)
     {
         var reference = new MethodReference(
