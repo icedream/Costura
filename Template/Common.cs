@@ -288,7 +288,6 @@ internal static class Common
                 {
                     CopyTo(copyStream, assemblyTempFile);
                 }
-                DeleteFileOnUnload(assemblyTempFilePath);
             }
         }
 
@@ -318,7 +317,7 @@ internal static class Common
         }
     }
 
-    private static void DeleteFileOnUnload(string path)
+    private static void DeleteOnUnload(string path)
     {
         if (IsWin32())
         {
@@ -332,7 +331,10 @@ internal static class Common
         {
             try
             {
-                File.Delete(path);
+                if (File.Exists(path))
+                    File.Delete(path);
+                else if (Directory.Exists(path))
+                    Directory.Delete(path, true);
             }
             catch
             {

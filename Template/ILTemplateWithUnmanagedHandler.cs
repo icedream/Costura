@@ -21,8 +21,9 @@ static class ILTemplateWithUnmanagedHandler
     {
         //Create a unique Temp directory for the application path.
         var md5Hash = "To be replaced at compile time";
-        var prefixPath = Path.Combine(Path.GetTempPath(), "Costura");
-        tempBasePath = Path.Combine(prefixPath, md5Hash);
+        var prefixPath = Path.GetTempPath();
+        tempBasePath = Path.Combine(prefixPath, "costura~" + md5Hash);
+        Common.DeleteOnUnload(tempBasePath);
 
         // Preload
         var unmanagedAssemblies = IntPtr.Size == 8 ? preload64List : preload32List;
