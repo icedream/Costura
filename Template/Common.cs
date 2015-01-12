@@ -12,25 +12,25 @@ using System.Security.Principal;
 using System.Text;
 using System.Threading;
 
-static class Common
+internal static class Common
 {
     private const int DelayUntilReboot = 4;
 
     [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
-    static extern bool MoveFileEx(string lpExistingFileName, string lpNewFileName, int dwFlags);
+    private static extern bool MoveFileEx(string lpExistingFileName, string lpNewFileName, int dwFlags);
 
     [DllImport("kernel32", SetLastError = true, CharSet = CharSet.Unicode)]
-    static extern IntPtr LoadLibrary(string dllToLoad);
+    private static extern IntPtr LoadLibrary(string dllToLoad);
 
     [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
     [return: MarshalAs(UnmanagedType.Bool)]
-    static extern bool SetDllDirectory(string lpPathName);
+    private static extern bool SetDllDirectory(string lpPathName);
 
     [DllImport("libdl.so")]
-    static extern IntPtr dlopen(string filename, int flags);
+    private static extern IntPtr dlopen(string filename, int flags);
 
-    [DllImport("/usr/lib/libSystem.dylib", EntryPoint="dlopen")]
-    static extern IntPtr dlopenMac(string filename, int flags);
+    [DllImport("/usr/lib/libSystem.dylib", EntryPoint = "dlopen")]
+    private static extern IntPtr dlopenMac(string filename, int flags);
 
     [Conditional("DEBUG")]
     public static void Log(string format, params object[] args)
@@ -39,7 +39,7 @@ static class Common
         Debug.WriteLine("=== COSTURA === " + string.Format(format, args));
     }
 
-    static void CopyTo(Stream source, Stream destination)
+    private static void CopyTo(Stream source, Stream destination)
     {
         var array = new byte[81920];
         int count;
@@ -49,7 +49,7 @@ static class Common
         }
     }
 
-    static void CreateDirectory(string tempBasePath)
+    private static void CreateDirectory(string tempBasePath)
     {
         if (!Directory.Exists(tempBasePath))
         {
@@ -57,7 +57,7 @@ static class Common
         }
     }
 
-    static byte[] ReadStream(Stream stream)
+    private static byte[] ReadStream(Stream stream)
     {
         var data = new Byte[stream.Length];
         stream.Read(data, 0, data.Length);
@@ -72,7 +72,7 @@ static class Common
             using (SHA1Managed sha1 = new SHA1Managed())
             {
                 byte[] hash = sha1.ComputeHash(bs);
-                StringBuilder formatted = new StringBuilder(2 * hash.Length);
+                StringBuilder formatted = new StringBuilder(2*hash.Length);
                 foreach (byte b in hash)
                 {
                     formatted.AppendFormat("{0:X2}", b);
@@ -90,7 +90,8 @@ static class Common
         {
             var currentName = assembly.GetName();
             if (string.Equals(currentName.Name, name.Name, StringComparison.InvariantCultureIgnoreCase) &&
-                string.Equals(CultureToString(currentName.CultureInfo), CultureToString(name.CultureInfo), StringComparison.InvariantCultureIgnoreCase))
+                string.Equals(CultureToString(currentName.CultureInfo), CultureToString(name.CultureInfo),
+                    StringComparison.InvariantCultureIgnoreCase))
             {
                 Log("Assembly '{0}' already loaded, returning existing assembly", assembly.FullName);
 
@@ -100,7 +101,7 @@ static class Common
         return null;
     }
 
-    static string CultureToString(CultureInfo culture)
+    private static string CultureToString(CultureInfo culture)
     {
         if (culture == null)
             return "";
@@ -138,7 +139,8 @@ static class Common
         return null;
     }
 
-    public static Assembly ReadFromEmbeddedResources(Dictionary<string, string> assemblyNames, Dictionary<string, string> symbolNames, AssemblyName requestedAssemblyName)
+    public static Assembly ReadFromEmbeddedResources(Dictionary<string, string> assemblyNames,
+        Dictionary<string, string> symbolNames, AssemblyName requestedAssemblyName)
     {
         var name = requestedAssemblyName.Name.ToLowerInvariant();
 
@@ -167,7 +169,7 @@ static class Common
         return Assembly.Load(assemblyData);
     }
 
-    static Stream LoadStream(Dictionary<string, string> resourceNames, string name)
+    private static Stream LoadStream(Dictionary<string, string> resourceNames, string name)
     {
         string value;
         if (resourceNames.TryGetValue(name, out value))
@@ -176,7 +178,7 @@ static class Common
         return null;
     }
 
-    static Stream LoadStream(string fullname)
+    private static Stream LoadStream(string fullname)
     {
         var executingAssembly = Assembly.GetExecutingAssembly();
         Stream finalStream;
@@ -207,7 +209,8 @@ static class Common
     }
 
     // Mutex code from http://stackoverflow.com/questions/229565/what-is-a-good-pattern-for-using-a-global-mutex-in-c
-    public static void PreloadUnmanagedLibraries(string hash, string tempBasePath, IEnumerable<string> libs, Dictionary<string, string> checksums)
+    public static void PreloadUnmanagedLibraries(string hash, string tempBasePath, IEnumerable<string> libs,
+        Dictionary<string, string> checksums)
     {
         if (!IsWin32())
         {
@@ -221,7 +224,8 @@ static class Common
 
         using (var mutex = new Mutex(false, mutexId))
         {
-            var allowEveryoneRule = new MutexAccessRule(new SecurityIdentifier(WellKnownSidType.WorldSid, null), MutexRights.FullControl, AccessControlType.Allow);
+            var allowEveryoneRule = new MutexAccessRule(new SecurityIdentifier(WellKnownSidType.WorldSid, null),
+                MutexRights.FullControl, AccessControlType.Allow);
             var securitySettings = new MutexSecurity();
             securitySettings.AddAccessRule(allowEveryoneRule);
             mutex.SetAccessControl(securitySettings);
@@ -250,13 +254,15 @@ static class Common
         }
     }
 
-    static void ActualPreloadUnmanagedLibraries(String tempBasePath, IEnumerable<string> libs, Dictionary<string, string> checksums)
+    private static void ActualPreloadUnmanagedLibraries(String tempBasePath, IEnumerable<string> libs,
+        Dictionary<string, string> checksums)
     {
         CreateDirectory(tempBasePath);
         InternalPreloadUnmanagedLibraries(tempBasePath, libs, checksums);
     }
 
-    static void InternalPreloadUnmanagedLibraries(string tempBasePath, IEnumerable<string> libs, Dictionary<string, string> checksums)
+    private static void InternalPreloadUnmanagedLibraries(string tempBasePath, IEnumerable<string> libs,
+        Dictionary<string, string> checksums)
     {
         string name;
 
@@ -312,28 +318,36 @@ static class Common
 
     private static void DeleteFileOnUnload(string path)
     {
-            // Delete file when appdomain is unloaded
-            AppDomain.CurrentDomain.DomainUnload += (sender, args) =>
+        if (IsWin32())
+        {
+            // Delete file when computer is being rebooted
+            MoveFileEx(path, null, DelayUntilReboot);
+            return;
+        }
+
+        // Delete file when appdomain is unloaded
+        /*AppDomain.CurrentDomain.DomainUnload += (sender, args) =>
+        {
+            try
             {
-                try
+                File.Delete(path);
+            }
+            catch
+            {
                 {
-                    File.Delete(path);
-                }
-                catch
-                {
-                    { } // force ignore error
-                }
-            };
+                } // force ignore error
+            }
+        };*/
     }
 
     private static bool IsWin32()
     {
         return (Environment.OSVersion.Platform == PlatformID.Win32NT
-            || Environment.OSVersion.Platform == PlatformID.Win32Windows
-            || Environment.OSVersion.Platform == PlatformID.Win32S);
+                || Environment.OSVersion.Platform == PlatformID.Win32Windows
+                || Environment.OSVersion.Platform == PlatformID.Win32S);
     }
 
-    static string ResourceNameToPath(string lib)
+    private static string ResourceNameToPath(string lib)
     {
         var bittyness = IntPtr.Size == 8 ? "64" : "32";
 
