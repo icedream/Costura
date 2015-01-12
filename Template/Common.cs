@@ -317,7 +317,7 @@ internal static class Common
         }
     }
 
-    private static void DeleteOnUnload(string path)
+    public static void DeleteOnUnload(string path)
     {
         if (IsWin32())
         {
