@@ -26,11 +26,13 @@ internal static class Common
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool SetDllDirectory(string lpPathName);
 
+    /*
     [DllImport("libdl.so")]
     private static extern IntPtr dlopen(string filename, int flags);
 
     [DllImport("/usr/lib/libSystem.dylib", EntryPoint = "dlopen")]
     private static extern IntPtr dlopenMac(string filename, int flags);
+     */
 
     [Conditional("DEBUG")]
     public static void Log(string format, params object[] args)
@@ -305,14 +307,14 @@ internal static class Common
 
                 LoadLibrary(assemblyTempFilePath);
             }
-            else if (name.EndsWith(".dylib") && Environment.OSVersion.Platform == PlatformID.MacOSX)
+            /*else if (name.EndsWith(".dylib") && Environment.OSVersion.Platform == PlatformID.MacOSX)
             {
                 var assemblyTempFilePath = Path.Combine(tempBasePath, name);
             }
             else if (name.EndsWith(".so") && Environment.OSVersion.Platform == PlatformID.Unix)
             {
                 var assemblyTempFilePath = Path.Combine(tempBasePath, name);
-            }
+            }*/
         }
     }
 
@@ -326,7 +328,7 @@ internal static class Common
         }
 
         // Delete file when appdomain is unloaded
-        /*AppDomain.CurrentDomain.DomainUnload += (sender, args) =>
+        AppDomain.CurrentDomain.DomainUnload += (sender, args) =>
         {
             try
             {
@@ -337,7 +339,7 @@ internal static class Common
                 {
                 } // force ignore error
             }
-        };*/
+        };
     }
 
     private static bool IsWin32()
